@@ -1,4 +1,6 @@
 
+A proxy that can change the bandwidth of the network.
+
 forked: https://github.com/jamesmoriarty/goforward
 
 # install
