@@ -39,7 +39,7 @@ func with(port string, directory string, f func()) {
 }
 
 type benchmark struct {
-	Rate        int
+	Rate        uint64
 	DurationMin float64
 	DurationMax float64
 }
@@ -58,7 +58,7 @@ func TestBenchmarks(t *testing.T) {
 		shutdown := make(chan os.Signal, 1)
 
 		for _, b := range benchmarks {
-			go Listen("8888", b.Rate, shutdown)
+			go Listen("8888", b.Rate, b.Rate, shutdown)
 
 			fileName := "goforward.exe"
 			proxyURL, _ := url.Parse("http://127.0.0.1:8888")
@@ -81,7 +81,7 @@ func TestBenchmarks(t *testing.T) {
 				t.Errorf(err.Error())
 			}
 
-			DurationExpected := (float64)(bytes("./"+fileName) / b.Rate)
+			DurationExpected := (float64)(bytes("./"+fileName) / int(b.Rate))
 
 			fmt.Printf("for %v@%v took %v expected %v\n", bytes("./"+fileName)/1024, b.Rate/1024, duration.Seconds(), DurationExpected)
 

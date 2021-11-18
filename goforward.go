@@ -1,38 +1,41 @@
 package goforward
 
 import (
-	"code.cloudfoundry.org/bytefmt"
 	"context"
 	"crypto/tls"
-	"github.com/juju/ratelimit"
-	log "github.com/sirupsen/logrus"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"time"
+
+	"code.cloudfoundry.org/bytefmt"
+	"github.com/juju/ratelimit"
+	log "github.com/sirupsen/logrus"
 )
 
 type RateLimitedConn struct {
 	net.Conn
-	*ratelimit.Bucket
+	upBucket   *ratelimit.Bucket
+	downBucket *ratelimit.Bucket
 }
 
 func (wrap RateLimitedConn) Read(b []byte) (n int, err error) {
 	written, err := wrap.Conn.Read(b)
 
-	wrap.Bucket.Wait(int64(written))
+	// wrap.Bucket.Wait(int64(written))
+	wrap.downBucket.Wait(int64(written))
 
 	return written, err
 }
 
 func (wrap RateLimitedConn) Write(b []byte) (n int, err error) {
-	wrap.Bucket.Wait(int64(len(b)))
+	wrap.upBucket.Wait(int64(len(b)))
 
 	return wrap.Conn.Write(b)
 }
 
-func handleTunneling(w http.ResponseWriter, r *http.Request, bucket *ratelimit.Bucket) {
+func handleTunneling(w http.ResponseWriter, r *http.Request, upBucket *ratelimit.Bucket, downBucket *ratelimit.Bucket) {
 	conn, err := net.DialTimeout("tcp", r.Host, 10*time.Second)
 
 	if err != nil {
@@ -40,7 +43,7 @@ func handleTunneling(w http.ResponseWriter, r *http.Request, bucket *ratelimit.B
 		return
 	}
 
-	destConn := RateLimitedConn{conn, bucket}
+	destConn := RateLimitedConn{conn, upBucket, downBucket}
 
 	w.WriteHeader(http.StatusOK)
 
@@ -55,7 +58,9 @@ func handleTunneling(w http.ResponseWriter, r *http.Request, bucket *ratelimit.B
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 	}
 
+	// up
 	go transfer(destConn, clientConn)
+	// down
 	go transfer(clientConn, destConn)
 }
 
@@ -80,7 +85,7 @@ func transfer(destination io.WriteCloser, source io.ReadCloser) {
 	copyWithLog(destination, source, "Transferred")
 }
 
-func handleHTTP(w http.ResponseWriter, req *http.Request, bucket *ratelimit.Bucket) {
+func handleHTTP(w http.ResponseWriter, req *http.Request, upBucket *ratelimit.Bucket, downBucket *ratelimit.Bucket) {
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			dialer := &net.Dialer{
@@ -90,7 +95,7 @@ func handleHTTP(w http.ResponseWriter, req *http.Request, bucket *ratelimit.Buck
 			}
 			conn, err := dialer.DialContext(ctx, network, addr)
 
-			return RateLimitedConn{conn, bucket}, err
+			return RateLimitedConn{conn, upBucket, downBucket}, err
 		},
 	}
 
@@ -115,10 +120,13 @@ func copyHeader(dst, src http.Header) {
 	}
 }
 
-func Listen(port string, rate int, shutdown <-chan os.Signal) {
-	log.Info("Goforward listening on :" + port + " with ratelimit " + bytefmt.ByteSize(uint64(rate)))
+func Listen(port string, upRate uint64, downRate uint64, shutdown <-chan os.Signal) {
+	log.Info("listening on :" + port + ", upload band :" + bytefmt.ByteSize(uint64(upRate)) + "bps, download band :" + bytefmt.ByteSize(uint64(downRate)) + "bps")
+	upRate /= 8
+	downRate /= 8
 
-	bucket := ratelimit.NewBucketWithRate(float64(rate), int64(rate))
+	upBucket := ratelimit.NewBucketWithRate(float64(upRate), int64(upRate))
+	downBucket := ratelimit.NewBucketWithRate(float64(downRate), int64(downRate))
 
 	server := &http.Server{
 		Addr: ":" + port,
@@ -126,9 +134,9 @@ func Listen(port string, rate int, shutdown <-chan os.Signal) {
 			log.WithFields(log.Fields{"Method": r.Method, "RemoteAddr": r.RemoteAddr}).Info(r.RequestURI)
 
 			if r.Method == http.MethodConnect {
-				handleTunneling(w, r, bucket)
+				handleTunneling(w, r, upBucket, downBucket)
 			} else {
-				handleHTTP(w, r, bucket)
+				handleHTTP(w, r, upBucket, downBucket)
 			}
 		}),
 		// Disable HTTP/2.
