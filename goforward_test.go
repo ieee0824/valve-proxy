@@ -1,4 +1,4 @@
-package goforward
+package vproxy
 
 import (
 	"fmt"

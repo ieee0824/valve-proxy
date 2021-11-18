@@ -7,7 +7,7 @@ import (
 	"syscall"
 
 	"code.cloudfoundry.org/bytefmt"
-	"github.com/jamesmoriarty/goforward"
+	vproxy "github.com/ieee0824/valve-proxy"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -33,6 +33,6 @@ func main() {
 
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
-	go goforward.Listen(port, upRate, downRate, shutdown)
+	go vproxy.Listen(port, upRate, downRate, shutdown)
 	<-shutdown
 }
